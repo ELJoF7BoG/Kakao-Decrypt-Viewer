@@ -1,0 +1,1318 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KakaoTalk DB Viewer</title>
+    
+    <!-- *** 수정: Tailwind CSS 로드를 config 보다 먼저 하도록 순서 변경 *** -->
+    <!-- Tailwind CSS 로드 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- Tailwind 다크모드 'class' 전략 설정 -->
+    <script>
+      tailwind.config = {
+        darkMode: 'class'
+      }
+    </script>
+    
+    <!-- sql.js 로드 (SQLite를 브라우저에서 읽기 위함) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"></script>
+    <script>
+        // 다크 모드 깜빡임 방지 (FOUC)
+        const savedTheme = localStorage.getItem('kakaoviewer_theme');
+        if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+    </script>
+    <style>
+        /* 기본 폰트 설정 */
+        body {
+            font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+        }
+        /* 스크롤바 스타일링 */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background-color: #cbd5e1; /* cool-gray-300 */
+        }
+        .dark ::-webkit-scrollbar-thumb {
+            background-color: #4b5563; /* gray-600 */
+        }
+        ::-webkit-scrollbar-track {
+            background-color: #f1f5f9; /* cool-gray-100 */
+        }
+        .dark ::-webkit-scrollbar-track {
+            background-color: #1f2937; /* gray-800 */
+        }
+        /* 채팅방 선택 시 활성화 스타일 */
+        .chat-room-item.active {
+            background-color: #e0f2fe; /* sky-100 */
+        }
+        .dark .chat-room-item.active {
+            background-color: #0c4a6e; /* sky-900 */
+        }
+        
+        /* *** 신규: 검색 결과 하이라이트 스타일 *** */
+        .search-highlight {
+            background-color: #fef08a; /* yellow-200 */
+            color: #1f2937; /* gray-800 */
+            border-radius: 2px;
+            padding: 0 1px;
+        }
+        .dark .search-highlight {
+            background-color: #facc15; /* yellow-500 */
+            color: #111827; /* gray-900 */
+        }
+        
+        /* *** 신규: '나'의 메시지 하이라이트 *** */
+        .search-highlight-me {
+            background-color: #c4b5fd; /* violet-300 */
+            color: #1f2937; /* gray-800 */
+            border-radius: 2px;
+            padding: 0 1px;
+        }
+        .dark .search-highlight-me {
+            background-color: #8b5cf6; /* violet-500 */
+            color: #f1f5f9; /* gray-100 */
+        }
+        
+        /* *** 수정: 현재 활성화된 검색 결과 (두 경우 모두 덮어쓰기) *** */
+        .search-highlight-active, .search-highlight-me.search-highlight-active {
+            background-color: #f97316; /* orange-500 */
+            color: white;
+        }
+        .dark .search-highlight-active, .dark .search-highlight-me.search-highlight-active {
+            background-color: #ea580c; /* orange-600 */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 h-screen flex flex-col dark:text-gray-200">
+    <!-- 로딩 스크린 -->
+    <div id="loading-screen" class="p-6 bg-white dark:bg-gray-800 shadow-md rounded-lg max-w-3xl mx-auto my-8">
+        <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-4">카카오톡 DB 뷰어</h1>
+        <p class="text-gray-600 dark:text-gray-300 mb-4">복호화된 `KakaoTalk.db` (대화)와 `KakaoTalk2.db` (친구) 파일을 로드하여 대화 내역을 확인합니다.</p>
+        
+        <div class="space-y-4">
+            <!-- 1. 내 User ID 입력 -->
+            <div>
+                <label for="my-user-id" class="block text-sm font-medium text-gray-700 dark:text-gray-300">1. 내 User ID 입력</label>
+                <input type="text" id="my-user-id" class="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm dark:text-white" placeholder="예: 123456789 (복호화에 사용한 ID)">
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">'나'와 '상대방'의 메시지를 구분하기 위해 필요합니다. (자동 저장됩니다)</p>
+            </div>
+            
+            <!-- 2. KakaoTalk.db (대화) 파일 로드 -->
+            <div>
+                <label for="db-file-talk" class="block text-sm font-medium text-gray-700 dark:text-gray-300">2. KakaoTalk.db (대화 내용)</label>
+                <input id="db-file-talk" type="file" class="mt-1 block w-full text-sm text-gray-500
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-md file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-indigo-50 file:text-indigo-700 dark:file:bg-indigo-900 dark:file:text-indigo-300
+                    hover:file:bg-indigo-100 dark:hover:file:bg-indigo-800 transition-colors"
+                >
+            </div>
+            
+            <!-- 3. KakaoTalk2.db (친구) 파일 로드 -->
+            <div>
+                <label for="db-file-friends" class="block text-sm font-medium text-gray-700 dark:text-gray-300">3. KakaoTalk2.db (친구 목록)</label>
+                <input id="db-file-friends" type="file" class="mt-1 block w-full text-sm text-gray-500
+                    file:mr-4 file:py-2 file:px-4
+                    file:rounded-md file:border-0
+                    file:text-sm file:font-semibold
+                    file:bg-sky-50 file:text-sky-700 dark:file:bg-sky-900 dark:file:text-sky-300
+                    hover:file:bg-sky-100 dark:hover:file:bg-sky-800 transition-colors"
+                >
+            </div>
+        </div>
+        
+        <!-- 설정 가져오기 -->
+        <div class="mt-6 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <h3 class="text-lg font-medium text-gray-800 dark:text-gray-200 mb-2">설정 가져오기 (선택)</h3>
+            <p class="text-sm text-gray-600 dark:text-gray-400 mb-3">다른 PC에서 저장한 설정을 먼저 불러올 수 있습니다.</p>
+            <button id="import-settings-btn" class="w-full px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-md hover:bg-green-700 transition-colors">
+                설정 가져오기 (.json)
+            </button>
+            <input type="file" id="import-settings-file" accept=".json" class="hidden">
+        </div>
+        
+        <p id="status-message" class="mt-4 text-sm text-blue-600 dark:text-blue-400 font-medium"></p>
+        
+        <!-- *** 신규: 뷰어 시작 버튼 *** -->
+        <button id="start-viewer-btn" class="hidden w-full px-4 py-2 mt-4 bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700 transition-colors disabled:bg-gray-400" disabled>
+            DB 파일 로드 필요
+        </button>
+    </div>
+
+    <!-- 채팅 뷰어 UI (파일 로드 후 표시) -->
+    <div id="viewer-ui" class="hidden flex-1 flex w-full h-full overflow-hidden">
+        <!-- 사이드바: 채팅방 목록 -->
+        <aside class="w-1/3 lg:w-1/4 h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col">
+            <header class="p-4 border-b border-gray-200 dark:border-gray-700">
+                <h2 class="text-xl font-bold text-gray-800 dark:text-gray-100">대화 목록</h2>
+            </header>
+            
+            <!-- 채팅방 이름 검색 바 -->
+            <div class="p-4 border-b border-gray-200 dark:border-gray-700">
+                <input type="text" id="search-input" placeholder="채팅방 이름 검색..." class="w-full px-3 py-2 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:text-white">
+            </div>
+            
+            <div id="chat-room-list" class="flex-1 overflow-y-auto">
+                <!-- 채팅방 목록이 여기에 동적으로 추가됩니다 -->
+            </div>
+        </aside>
+
+        <!-- 메인: 대화 내용 -->
+        <main class="flex-1 flex flex-col h-full bg-gray-50 dark:bg-gray-900">
+            <header id="chat-header" class="p-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center space-x-4">
+                
+                <!-- *** 수정: 채팅방 이름 + 수정 버튼 래퍼 *** -->
+                <div class="flex-1 min-w-0 flex items-center space-x-2"> 
+                    <h2 id="chat-room-name" class="text-xl font-bold text-gray-800 dark:text-gray-100 truncate" title="">채팅방을 선택하세요</h2>
+                    
+                    <!-- *** 신규: 채팅방 이름 변경 버튼 *** -->
+                    <button id="edit-room-name-btn" class="hidden p-1 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-400 dark:text-gray-500" title="채팅방 이름 변경">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.536L16.732 3.732z" />
+                        </svg>
+                    </button>
+                </div>
+                
+                <!-- *** 수정: 대화 내용 검색 (네비게이션 버튼 추가) *** -->
+                <div id="message-search-container" class="hidden flex-1 max-w-xs relative">
+                    <input type="text" id="message-search-input" placeholder="대화 내용 검색..." class="w-full px-3 py-1.5 text-sm bg-gray-50 dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 dark:text-white pr-20">
+                    <div class="absolute inset-y-0 right-0 flex items-center pr-2 space-x-0.5">
+                        <span id="search-result-count" class="text-xs text-gray-500 dark:text-gray-400 mr-1">0/0</span>
+                        <button id="search-prev-btn" class="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50" disabled>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M5 15l7-7 7 7" />
+                            </svg>
+                        </button>
+                        <button id="search-next-btn" class="p-1 rounded text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50" disabled>
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- 설정 메뉴 및 폴더 이동 버튼 컨테이너 -->
+                <div class="flex items-center space-x-2 relative">
+                    <!-- 폴더 이동 버튼 (채팅방 선택 시 표시) -->
+                    <button id="move-folder-btn" class="hidden p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400" title="폴더로 이동">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                    </button>
+
+                    <!-- 톱니바퀴 설정 버튼 -->
+                    <button id="settings-btn" class="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400" title="설정">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                    </button>
+                    
+                    <!-- 설정 드롭다운 메뉴 -->
+                    <div id="settings-dropdown" class="hidden absolute right-0 top-10 mt-2 w-48 bg-white dark:bg-gray-700 rounded-md shadow-lg py-1 z-20 border dark:border-gray-600">
+                        <button id="dark-mode-toggle" class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600">다크 모드 전환</button>
+                        <button id="export-settings-btn" class="w-full text-left px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-600">설정 내보내기</button>
+                        <button id="home-btn" class="w-full text-left px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900">초기 화면으로</button>
+                    </div>
+                </div>
+
+            </header>
+            <div id="message-list" class="flex-1 overflow-y-auto p-4 space-y-4">
+                <!-- 메시지가 여기에 동적으로 추가됩니다 -->
+                <div id="message-placeholder" class="text-center text-gray-500 pt-10">
+                    왼쪽에서 채팅방을 선택하면 대화 내용이 표시됩니다.
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const myUserIdInput = document.getElementById('my-user-id');
+        const talkDbInput = document.getElementById('db-file-talk');
+        const friendsDbInput = document.getElementById('db-file-friends');
+        const statusMessage = document.getElementById('status-message');
+        
+        const loadingScreen = document.getElementById('loading-screen');
+        const viewerUI = document.getElementById('viewer-ui');
+        
+        const chatRoomListEl = document.getElementById('chat-room-list');
+        const messageListEl = document.getElementById('message-list');
+        const chatRoomNameEl = document.getElementById('chat-room-name');
+        const messagePlaceholder = document.getElementById('message-placeholder');
+        
+        // --- 채팅방 이름 검색 바 ---
+        const searchInput = document.getElementById('search-input');
+        
+        // --- 대화 내용 검색 바 ---
+        const messageSearchContainer = document.getElementById('message-search-container');
+        const messageSearchInput = document.getElementById('message-search-input');
+        
+        // --- 뷰어 시작 버튼 ---
+        const startViewerBtn = document.getElementById('start-viewer-btn');
+
+        // --- 설정 메뉴 버튼 ---
+        const importBtn = document.getElementById('import-settings-btn');
+        const importFileInput = document.getElementById('import-settings-file');
+        const settingsBtn = document.getElementById('settings-btn');
+        const settingsDropdown = document.getElementById('settings-dropdown');
+        const darkModeToggle = document.getElementById('dark-mode-toggle');
+        const exportBtn = document.getElementById('export-settings-btn');
+        const homeBtn = document.getElementById('home-btn');
+        const moveFolderBtn = document.getElementById('move-folder-btn');
+        
+        // --- 신규: 채팅방 이름 변경 버튼 ---
+        const editRoomNameBtn = document.getElementById('edit-room-name-btn');
+
+        // --- 대화 내용 검색 네비게이션 ---
+        const searchResultCountEl = document.getElementById('search-result-count');
+        const searchPrevBtn = document.getElementById('search-prev-btn');
+        const searchNextBtn = document.getElementById('search-next-btn');
+        let searchResults = []; // To store <mark> elements
+        let currentSearchIndex = -1; // Current search result index
+
+        let myUserId = null;
+        let dbTalk = null;
+        let dbFriends = null;
+        
+        let chatRooms = [];
+        let chatLogs = {}; // { chat_id: [messages...], ... }
+        let friendsMap = new Map(); // { user_id: name, ... }
+        
+        let manualFriendsMap = new Map(); // 수동으로 추가한 친구 맵
+        let chatRoomFolders = new Map(); // { chat_id: "folderName" }
+        let chatRoomNames = new Map(); // *** 신규: { chat_id: "customName" } ***
+        let chatRoomTypes = new Map(); // *** 신규: { chat_id: 4 (open) } ***
+        
+        let collapsedFolders = new Set(); // { "folderName1", "folderName2" }
+        let currentChatRoom = { id: null, name: null, type: null }; // *** 수정: type 추가 ***
+
+        // --- 다크 모드 버튼 텍스트 업데이트 ---
+        function updateDarkModeButtonText() {
+            if (document.documentElement.classList.contains('dark')) {
+                darkModeToggle.textContent = '라이트 모드 전환';
+            } else {
+                darkModeToggle.textContent = '다크 모드 전환';
+            }
+        }
+
+        // 페이지 로드 시 저장된 User ID 및 설정 불러오기
+        window.addEventListener('load', () => {
+            const savedUserId = localStorage.getItem('kakaoviewer_myUserId');
+            if (savedUserId) {
+                myUserIdInput.value = savedUserId;
+            }
+            loadSettingsFromStorage();
+            updateDarkModeButtonText(); // *** 추가: 페이지 로드 시 버튼 텍스트 설정 ***
+        });
+
+        // 설정(친구, 폴더) 저장
+        function saveSettingsToStorage() {
+            localStorage.setItem('kakaoviewer_friendMap', JSON.stringify(Object.fromEntries(manualFriendsMap)));
+            localStorage.setItem('kakaoviewer_folderMap', JSON.stringify(Object.fromEntries(chatRoomFolders)));
+            localStorage.setItem('kakaoviewer_roomNameMap', JSON.stringify(Object.fromEntries(chatRoomNames))); // *** 신규: 채팅방 이름 저장 ***
+            localStorage.setItem('kakaoviewer_collapsedFolders', JSON.stringify(Array.from(collapsedFolders)));
+        }
+
+        // 설정(친구, 폴더) 로드
+        function loadSettingsFromStorage() {
+            const savedFriends = localStorage.getItem('kakaoviewer_friendMap');
+            if (savedFriends) {
+                try {
+                    manualFriendsMap = new Map(Object.entries(JSON.parse(savedFriends)));
+                } catch(e) {
+                    console.error("저장된 친구 목록 파싱 실패:", e);
+                    localStorage.removeItem('kakaoviewer_friendMap');
+                    manualFriendsMap = new Map();
+                }
+            }
+            
+            const savedFolders = localStorage.getItem('kakaoviewer_folderMap');
+            if (savedFolders) {
+                try {
+                    chatRoomFolders = new Map(Object.entries(JSON.parse(savedFolders)));
+                } catch(e) {
+                    console.error("저장된 폴더 목록 파싱 실패:", e);
+                    localStorage.removeItem('kakaoviewer_folderMap');
+                    chatRoomFolders = new Map();
+                }
+            }
+            
+            // *** 신규: 채팅방 이름 로드 ***
+            const savedRoomNames = localStorage.getItem('kakaoviewer_roomNameMap');
+            if (savedRoomNames) {
+                try {
+                    chatRoomNames = new Map(Object.entries(JSON.parse(savedRoomNames)));
+                } catch(e) {
+                    console.error("저장된 채팅방 이름 파싱 실패:", e);
+                    localStorage.removeItem('kakaoviewer_roomNameMap');
+                    chatRoomNames = new Map();
+                }
+            }
+            
+            const savedCollapsed = localStorage.getItem('kakaoviewer_collapsedFolders');
+            if (savedCollapsed) {
+                try {
+                    collapsedFolders = new Set(JSON.parse(savedCollapsed));
+                } catch(e) {
+                    console.error("저장된 폴더 접힘 상태 파싱 실패:", e);
+                    localStorage.removeItem('kakaoviewer_collapsedFolders');
+                    collapsedFolders = new Set();
+                }
+            }
+        }
+
+        // 친구 이름 입력 받기
+        function promptForFriendName(userId) {
+            const currentName = manualFriendsMap.get(String(userId)) || '';
+            const name = prompt(`ID: ${userId} 님의 이름을 입력하세요:`, currentName);
+            if (name !== null) { // 취소를 누르지 않았다면
+                if (name.trim()) {
+                    manualFriendsMap.set(String(userId), name.trim()); // ID를 문자열로 저장
+                } else {
+                    manualFriendsMap.delete(String(userId)); // 이름을 비우면 수동 맵에서 제거
+                }
+                saveSettingsToStorage();
+                
+                // 현재 뷰에 즉시 반영
+                // (DB2에서 로드한 것을 수동 맵으로 덮어쓰기)
+                manualFriendsMap.forEach((name, id) => friendsMap.set(Number(id), name));
+                // DB에 없는 수동 친구 삭제 반영 (DB 맵에 이름이 남아있을 수 있으므로)
+                if (!name.trim()) {
+                     // DB2 맵에서 다시 로드 시도
+                    if (dbFriends) { // dbFriends가 로드 되었는지 확인
+                        try {
+                            const originalFriend = dbFriends.exec(`SELECT name FROM friends_dec WHERE id = ${userId}`);
+                            if (originalFriend.length > 0 && originalFriend[0].values.length > 0) {
+                                friendsMap.set(Number(userId), originalFriend[0].values[0][0]);
+                            } else {
+                                friendsMap.delete(Number(userId));
+                            }
+                        } catch(e) {
+                             console.error("친구 이름 복원 중 DB 오류:", e);
+                             friendsMap.delete(Number(userId));
+                        }
+                    } else {
+                         friendsMap.delete(Number(userId));
+                    }
+                }
+                
+                renderChatRoomList(); // 채팅방 목록 (이름이 변경됐을 수 있음)
+                if (currentChatRoom.id) {
+                    // 현재 채팅방 이름 재계산 및 다시 로드
+                    loadChatMessages(currentChatRoom.id); // *** 수정: roomName 파라미터 제거 ***
+                }
+            }
+        }
+        
+        // --- 폴더 이름 입력 받기 ---
+        function promptForFolderName() {
+            if (!currentChatRoom.id) return;
+            const chatId = String(currentChatRoom.id);
+            const currentFolder = chatRoomFolders.get(chatId) || '';
+            const folderName = prompt(`'${currentChatRoom.name}' 채팅방을 이동할 폴더 이름을 입력하세요.\n(비워두면 '미분류'로 이동):`, currentFolder);
+            
+            if (folderName !== null) { // 취소 버튼을 누르지 않았을 때
+                if (folderName.trim()) {
+                    chatRoomFolders.set(chatId, folderName.trim());
+                } else {
+                    chatRoomFolders.delete(chatId); // 비어있으면 '미분류'로 (맵에서 제거)
+                }
+                saveSettingsToStorage();
+                renderChatRoomList(); // 채팅방 목록 다시 그리기
+            }
+        }
+        
+        // *** 신규: 채팅방 이름 입력 받기 ***
+        function promptForRoomName() {
+            if (!currentChatRoom.id) return;
+            const chatId = String(currentChatRoom.id);
+            const currentName = chatRoomNames.get(chatId) || '';
+            const name = prompt(`'${currentChatRoom.name}' 채팅방의 새 이름을 입력하세요.\n(비워두면 자동으로 복원):`, currentName);
+            
+            if (name !== null) { // 취소 버튼을 누르지 않았을 때
+                if (name.trim()) {
+                    chatRoomNames.set(chatId, name.trim());
+                } else {
+                    chatRoomNames.delete(chatId); // 비어있으면 맵에서 제거
+                }
+                saveSettingsToStorage();
+                renderChatRoomList(); // 사이드바 목록 갱신
+                loadChatMessages(currentChatRoom.id); // 헤더 갱신
+            }
+        }
+
+
+        // --- 신규 기능: 설정 메뉴 로직 ---
+        
+        // 설정 내보내기
+        exportBtn.addEventListener('click', () => {
+            const currentUserId = myUserIdInput.value;
+            if (!currentUserId && manualFriendsMap.size === 0 && chatRoomFolders.size === 0 && chatRoomNames.size === 0) {
+                statusMessage.textContent = "내보낼 설정이 없습니다. (User ID, 친구, 폴더, 채팅방 이름)";
+                return;
+            }
+            
+            const settings = {
+                myUserId: currentUserId,
+                friendMap: Object.fromEntries(manualFriendsMap),
+                folderMap: Object.fromEntries(chatRoomFolders), // 폴더 정보 추가
+                roomNameMap: Object.fromEntries(chatRoomNames), // *** 신규: 채팅방 이름 추가 ***
+                collapsedFolders: Array.from(collapsedFolders) // 폴더 접힘 상태 추가
+            };
+            
+            const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'kakaoviewer_settings.json';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            statusMessage.textContent = "설정 파일(kakaoviewer_settings.json)을 내보냈습니다.";
+            settingsDropdown.classList.add('hidden'); // 메뉴 닫기
+        });
+        
+        // 설정 가져오기 버튼 클릭 -> 숨겨진 파일 입력 클릭
+        importBtn.addEventListener('click', () => {
+            importFileInput.click();
+        });
+        
+        // 파일이 선택되면 설정 가져오기 실행
+        importFileInput.addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    const settings = JSON.parse(reader.result);
+                    
+                    if (settings.myUserId) {
+                        myUserIdInput.value = settings.myUserId;
+                        localStorage.setItem('kakaoviewer_myUserId', settings.myUserId);
+                    }
+                    
+                    if (settings.friendMap) {
+                        manualFriendsMap = new Map(Object.entries(settings.friendMap));
+                    }
+                    if (settings.folderMap) { // 폴더 정보 가져오기
+                        chatRoomFolders = new Map(Object.entries(settings.folderMap));
+                    }
+                    if (settings.roomNameMap) { // *** 신규: 채팅방 이름 가져오기 ***
+                        chatRoomNames = new Map(Object.entries(settings.roomNameMap));
+                    }
+                    if (settings.collapsedFolders) { // 폴더 접힘 상태 가져오기
+                        collapsedFolders = new Set(settings.collapsedFolders);
+                    }
+                    saveSettingsToStorage(); // 가져온 설정 저장
+                    
+                    statusMessage.textContent = "설정을 성공적으로 가져왔습니다.";
+
+                } catch (err) {
+                    statusMessage.textContent = "설정 파일이 손상되었거나 잘못된 형식입니다: " + err.message;
+                    console.error(err);
+                }
+                
+                // 동일한 파일을 다시 로드할 수 있도록 값 초기화
+                importFileInput.value = null;
+            };
+            reader.onerror = () => {
+                statusMessage.textContent = "설정 파일 읽기 실패";
+                console.error(reader.error);
+            };
+            reader.readAsText(file);
+        });
+
+        // 설정 메뉴 토글
+        settingsBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // 이벤트 버블링 중지
+            settingsDropdown.classList.toggle('hidden');
+        });
+
+        // *** 수정: 다크 모드 토글 로직 ***
+        darkModeToggle.addEventListener('click', () => {
+            const htmlEl = document.documentElement;
+            // 현재 상태를 확인하고 반대로 적용
+            if (htmlEl.classList.contains('dark')) {
+                // 라이트 모드로 전환
+                htmlEl.classList.remove('dark');
+                localStorage.setItem('kakaoviewer_theme', 'light');
+            } else {
+                // 다크 모드로 전환
+                htmlEl.classList.add('dark');
+                localStorage.setItem('kakaoviewer_theme', 'dark');
+            }
+            updateDarkModeButtonText(); // *** 추가: 버튼 텍스트 업데이트 ***
+            settingsDropdown.classList.add('hidden'); // 메뉴 닫기
+        });
+        
+        // 초기 화면으로
+        homeBtn.addEventListener('click', () => {
+            location.reload();
+        });
+        
+        // 폴더 이동 버튼
+        moveFolderBtn.addEventListener('click', promptForFolderName);
+        
+        // *** 신규: 채팅방 이름 변경 버튼 ***
+        editRoomNameBtn.addEventListener('click', promptForRoomName);
+
+        // 바깥 클릭 시 설정 메뉴 닫기
+        window.addEventListener('click', (e) => {
+            if (!settingsDropdown.classList.contains('hidden') && !settingsBtn.contains(e.target)) {
+                settingsDropdown.classList.add('hidden');
+            }
+        });
+        
+        // --- 설정 메뉴 로직 끝 ---
+        
+        // --- 채팅방 이름 검색 로직 ---
+        searchInput.addEventListener('input', () => {
+            renderChatRoomList(); // 검색어 입력 시 목록 다시 렌더링
+        });
+        
+        // --- 대화 내용 검색 로직 ---
+        messageSearchInput.addEventListener('input', () => {
+            filterAndRenderMessages(); // 검색어 입력 시 메시지 목록 다시 렌더링
+        });
+        
+        // --- 대화 내용 검색 네비게이션 ---
+        searchPrevBtn.addEventListener('click', () => navigateSearchResults(-1));
+        searchNextBtn.addEventListener('click', () => navigateSearchResults(1));
+        
+        function navigateSearchResults(direction) {
+            if (searchResults.length === 0) return;
+
+            // 현재 활성화된 하이라이트 비활성화
+            if (currentSearchIndex !== -1 && searchResults[currentSearchIndex]) {
+                searchResults[currentSearchIndex].classList.remove('search-highlight-active'); // *** 수정: 'active' 클래스만 제거 ***
+            }
+
+            // 인덱스 계산
+            currentSearchIndex = (currentSearchIndex + direction + searchResults.length) % searchResults.length;
+            
+            const activeResult = searchResults[currentSearchIndex];
+            
+            // 새 하이라이트 활성화
+            activeResult.classList.add('search-highlight-active'); // *** 수정: 'active' 클래스만 추가 ***
+            
+            // 스크롤
+            activeResult.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // 카운트 업데이트
+            searchResultCountEl.textContent = `${currentSearchIndex + 1}/${searchResults.length}`;
+        }
+        
+        // --- 뷰어 시작 버튼 로직 ---
+        startViewerBtn.addEventListener('click', checkAndLaunchViewer);
+        
+        function checkFileStatus() {
+            startViewerBtn.classList.remove('hidden'); // *** 수정: 버튼 표시 ***
+            
+            if (dbTalk && dbFriends) {
+                startViewerBtn.disabled = false;
+                startViewerBtn.textContent = '뷰어 시작하기';
+            } else if (dbTalk) {
+                startViewerBtn.textContent = 'KakaoTalk2.db 파일 필요';
+            } else if (dbFriends) {
+                startViewerBtn.textContent = 'KakaoTalk.db 파일 필요';
+            }
+        }
+
+
+        // sql.js 초기화
+        let SQL;
+        initSqlJs({
+            locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}`
+        }).then(sql => {
+            SQL = sql;
+            statusMessage.textContent = "SQLite 라이브러리 로드 완료. 파일을 선택하세요.";
+        }).catch(err => {
+            statusMessage.textContent = "SQLite 라이브러리 로드 실패: " + err.message;
+            console.error(err);
+        });
+
+        // 1. KakaoTalk.db (대화) 파일 로더
+        talkDbInput.addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            statusMessage.textContent = "KakaoTalk.db 로드 중... (시간이 걸릴 수 있습니다)";
+            startViewerBtn.disabled = true;
+            startViewerBtn.textContent = 'DB 로드 중...';
+            
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    const Uints = new Uint8Array(reader.result);
+                    dbTalk = new SQL.Database(Uints);
+                    statusMessage.textContent = "KakaoTalk.db 로드 성공.";
+                    
+                    // 데이터 추출
+                    extractTalkData();
+                    checkFileStatus(); // *** 수정: 바로 뷰어 시작 안함
+
+                } catch (err) {
+                    statusMessage.textContent = "DB 로드 실패: " + err.message;
+                    console.error(err);
+                }
+            };
+            reader.onerror = () => {
+                statusMessage.textContent = "파일 읽기 실패";
+                console.error(reader.error);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        // 2. KakaoTalk2.db (친구) 파일 로더
+        friendsDbInput.addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            statusMessage.textContent = "KakaoTalk2.db 로드 중...";
+            startViewerBtn.disabled = true;
+            startViewerBtn.textContent = 'DB 로드 중...';
+            
+            const reader = new FileReader();
+            reader.onload = () => {
+                try {
+                    const Uints = new Uint8Array(reader.result);
+                    dbFriends = new SQL.Database(Uints);
+                    statusMessage.textContent = "KakaoTalk2.db 로드 성공.";
+                    
+                    // 친구 데이터 추출
+                    extractFriendsData();
+                    checkFileStatus(); // *** 수정: 바로 뷰어 시작 안함
+
+                } catch (err) {
+                    statusMessage.textContent = "DB 로드 실패: " + err.message;
+                    console.error(err);
+                }
+            };
+            reader.onerror = () => {
+                statusMessage.textContent = "파일 읽기 실패";
+                console.error(reader.error);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+        
+        // *** 신규: 뷰어 시작 버튼 클릭 시 호출됨 ***
+        function checkAndLaunchViewer() {
+            myUserId = myUserIdInput.value;
+            if (!myUserId) {
+                statusMessage.textContent = "'내 User ID'를 입력하세요.";
+                myUserIdInput.focus();
+                return;
+            }
+
+            if (dbTalk && dbFriends) {
+                localStorage.setItem('kakaoviewer_myUserId', myUserId);
+            
+                statusMessage.textContent = "모든 데이터 로드 완료. 뷰어를 시작합니다.";
+                loadingScreen.classList.add('hidden');
+                viewerUI.classList.remove('hidden');
+                viewerUI.classList.add('flex');
+                
+                // (DB2에서 로드한 것을 수동 맵으로 덮어쓰기)
+                manualFriendsMap.forEach((name, id) => friendsMap.set(Number(id), name));
+
+                // 내 이름도 friendsMap에 추가 (DB에 없는 경우 대비)
+                if (!friendsMap.has(Number(myUserId))) {
+                    friendsMap.set(Number(myUserId), "나");
+                }
+                
+                renderChatRoomList();
+            } else {
+                statusMessage.textContent = "DB 파일 두 개가 모두 로드되어야 합니다.";
+            }
+        }
+
+        let chatRoomTimestamps = {}; // { chat_id: 123456789 (timestamp) }
+
+        // KakaoTalk.db에서 채팅방 및 메시지 데이터 추출
+        function extractTalkData() {
+            try {
+                // *** 1. chat_rooms_dec 컬럼 확인 ***
+                let roomColumns = "id, members, last_message";
+                try {
+                    const res = dbTalk.exec("PRAGMA table_info(chat_rooms_dec)");
+                    const columns = res[0].values.map(col => col[1]);
+                    
+                    let columnList = ["id", "members", "last_message"];
+                    if (columns.includes('name')) columnList.push('name');
+                    // 'type'은 chat_logs_dec에서 가져오므로 여기서는 제거
+                    roomColumns = columnList.join(", ");
+
+                } catch (e) {
+                    console.warn("'name' column check failed. Proceeding with defaults.", e);
+                }
+
+                // 채팅방 목록 (`chat_rooms_dec`)
+                const roomsStmt = dbTalk.prepare(`SELECT ${roomColumns} FROM chat_rooms_dec`);
+                chatRooms = [];
+                while (roomsStmt.step()) {
+                    const row = roomsStmt.getAsObject();
+                    chatRooms.push(row);
+                }
+                roomsStmt.free();
+                
+                // *** 2. chat_logs_dec 컬럼 확인 (type) ***
+                let logColumns = "chat_id, user_id, message, created_at, attachment";
+                let hasTypeColumn = false;
+                try {
+                    const res = dbTalk.exec("PRAGMA table_info(chat_logs_dec)");
+                    const columns = res[0].values.map(col => col[1]);
+                    if (columns.includes('type')) {
+                        logColumns += ", type";
+                        hasTypeColumn = true;
+                    }
+                } catch (e) {
+                    console.warn("'type' column check in chat_logs_dec failed.");
+                }
+                
+                // 채팅 로그 (`chat_logs_dec`)
+                const logsStmt = dbTalk.prepare(`SELECT ${logColumns} FROM chat_logs_dec`);
+                chatLogs = {};
+                chatRoomTimestamps = {};
+                chatRoomTypes = new Map(); // *** 신규: 맵 초기화 ***
+                
+                while (logsStmt.step()) {
+                    const row = logsStmt.getAsObject();
+                    if (!chatLogs[row.chat_id]) {
+                        chatLogs[row.chat_id] = [];
+                    }
+                    chatLogs[row.chat_id].push(row);
+
+                    // 마지막 메시지 타임스탬프 저장 (정렬용)
+                    if (!chatRoomTimestamps[row.chat_id] || row.created_at > chatRoomTimestamps[row.chat_id]) {
+                        chatRoomTimestamps[row.chat_id] = row.created_at;
+                    }
+                    
+                    // *** 신규: 오픈채팅방 타입 저장 (type: 4) ***
+                    if (hasTypeColumn && row.type === 4 && !chatRoomTypes.has(row.chat_id)) {
+                        chatRoomTypes.set(row.chat_id, 4);
+                    }
+                }
+                logsStmt.free();
+
+                statusMessage.textContent = `KakaoTalk.db 분석 완료: 채팅방 ${chatRooms.length}개, 메시지 ${Object.keys(chatLogs).length}개 그룹 로드.`;
+            
+            } catch (err) {
+                statusMessage.textContent = "KakaoTalk.db 테이블 분석 실패: " + err.message + ". ('_dec' 테이블이 존재하나요?)";
+                console.error(err);
+            }
+        }
+
+        // KakaoTalk2.db에서 친구 데이터 추출
+        function extractFriendsData() {
+            try {
+                // 친구 목록 (`friends_dec`)
+                const friendsStmt = dbFriends.prepare("SELECT id, name FROM friends_dec");
+                friendsMap = new Map();
+                while (friendsStmt.step()) {
+                    const row = friendsStmt.getAsObject();
+                    friendsMap.set(row.id, row.name);
+                }
+                friendsStmt.free();
+                
+                statusMessage.textContent = `KakaoTalk2.db 분석 완료: 친구 ${friendsMap.size}명 로드.`;
+
+            } catch (err) {
+                statusMessage.textContent = "KakaoTalk2.db 테이블 분석 실패: " + err.message + ". ('friends_dec' 테이블이 존재하나요?)";
+                console.error(err);
+            }
+        }
+        
+        // 채팅방 이름 생성 로직 분리
+        function getRoomName(room) {
+            // *** 1. 커스텀 이름 확인 ***
+            const customName = chatRoomNames.get(String(room.id));
+            if (customName) return customName;
+
+            // *** 2. DB에 저장된 이름 확인 ***
+            let roomName = room.name || null;
+
+            // *** 3. 멤버 목록으로 추론 ***
+            if (!roomName && room.members) { 
+                try {
+                    const memberIds = JSON.parse(room.members);
+                    const memberNames = memberIds
+                        .map(id => friendsMap.get(id) || `ID:${id}`)
+                        .filter(name => name !== "나"); // 내 이름 제외
+                    
+                    if (memberNames.length > 0) {
+                        roomName = memberNames.slice(0, 3).join(', ');
+                        if (memberNames.length > 3) roomName += '...';
+                    } else {
+                        roomName = "나와의 채팅방"; // 멤버가 '나' 밖에 없는 경우
+                    }
+                } catch (e) {
+                    console.warn("멤버 파싱 실패:", room.members, e);
+                    roomName = "이름 없는 채팅방";
+                }
+            }
+            return roomName || "이름 없는 채팅방"; // 최종적으로 이름이 없으면
+        }
+        
+        // *** 신규: 전체 참가자 목록 (툴팁용) ***
+        function getFullParticipantList(room) {
+            // 커스텀 이름이 있으면, 툴팁은 (자동)을 표시
+            const customName = chatRoomNames.get(String(room.id));
+            if (customName) {
+                const autoName = getRoomName(Object.assign({}, room, { name: null })); // 커스텀 이름 없는 척
+                return `(자동: ${autoName})`;
+            }
+
+            // DB 이름이 있으면, 툴팁은 멤버 목록
+            if (room.name) {
+                try {
+                    const memberIds = JSON.parse(room.members);
+                    const memberNames = memberIds
+                        .map(id => friendsMap.get(id) || `ID:${id}`); // '나' 포함
+                    return `참가자: ${memberNames.join(', ')}`;
+                } catch (e) {
+                    return room.name; // 파싱 실패 시 DB 이름 반환
+                }
+            }
+            
+            // 1:1 또는 그룹 (멤버 기반)
+            if (room.members) {
+                try {
+                    const memberIds = JSON.parse(room.members);
+                    const memberNames = memberIds
+                        .map(id => friendsMap.get(id) || `ID:${id}`);
+                    
+                    if (memberNames.length === 1 && memberNames[0] === "나") {
+                        return "나와의 채팅방";
+                    }
+                    return memberNames.join(', ');
+                } catch (e) {
+                    return "참가자 목록 파싱 오류";
+                }
+            }
+            
+            return "참가자 정보 없음";
+        }
+
+
+        // 1. 채팅방 목록 렌더링 (폴더링/검색 기능)
+        function renderChatRoomList() {
+            chatRoomListEl.innerHTML = ''; // 목록 초기화
+            const searchTerm = searchInput.value.toLowerCase();
+            
+            // 0. 검색어에 따라 채팅방 필터링
+            const filteredChatRooms = chatRooms.filter(room => {
+                if (!searchTerm) return true; // 검색어 없으면 모두 통과
+                const roomName = getRoomName(room).toLowerCase();
+                return roomName.includes(searchTerm);
+            });
+            
+            // 1. 각 room 객체에 마지막 타임스탬프 주입
+            filteredChatRooms.forEach(room => {
+                room.last_timestamp = chatRoomTimestamps[room.id] || 0;
+            });
+
+            // 2. last_timestamp 기준으로 내림차순 정렬
+            filteredChatRooms.sort((a, b) => b.last_timestamp - a.last_timestamp);
+
+            // 3. 검색 중인지 아닌지에 따라 분기
+            if (searchTerm) {
+                // --- 검색 중: 폴더 없이 목록만 표시 ---
+                filteredChatRooms.forEach(room => {
+                    renderRoomItem(room, chatRoomListEl); // 부모로 chatRoomListEl 전달
+                });
+            } else {
+                // --- 검색 중 아님: 폴더별로 그룹화 ---
+                const groupedRooms = { "미분류": [] };
+                filteredChatRooms.forEach(room => {
+                    const folderName = chatRoomFolders.get(String(room.id)) || "미분류";
+                    if (!groupedRooms[folderName]) {
+                        groupedRooms[folderName] = [];
+                    }
+                    groupedRooms[folderName].push(room);
+                });
+
+                // 4. 폴더 이름 정렬 ('미분류'는 마지막에)
+                const folderNames = Object.keys(groupedRooms).sort();
+                const uncategorizedIndex = folderNames.indexOf("미분류");
+                if (uncategorizedIndex > -1) {
+                    folderNames.splice(uncategorizedIndex, 1);
+                    folderNames.push("미분류");
+                }
+
+                // 5. 그룹별로 렌더링
+                folderNames.forEach(folderName => {
+                    // 폴더 헤더
+                    const folderHeader = document.createElement('div');
+                    folderHeader.className = "flex justify-between items-center p-2 px-4 bg-gray-100 dark:bg-gray-700 text-sm font-semibold text-gray-600 dark:text-gray-300 sticky top-0 cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors";
+                    folderHeader.innerHTML = `
+                        <span>${escapeHTML(folderName)}</span>
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7" />
+                        </svg>
+                    `;
+                    
+                    // 채팅방을 담을 컨테이너
+                    const folderContainer = document.createElement('div');
+                    
+                    chatRoomListEl.appendChild(folderHeader);
+                    chatRoomListEl.appendChild(folderContainer);
+                    
+                    const arrow = folderHeader.querySelector('svg');
+                    const isCollapsed = collapsedFolders.has(folderName);
+                    
+                    // 폴더 접힘 상태 적용
+                    if (isCollapsed) {
+                        folderContainer.classList.add('hidden');
+                        arrow.style.transform = 'rotate(-90deg)';
+                    }
+
+                    // 폴더 헤더 클릭 이벤트 (접기/펼치기)
+                    folderHeader.addEventListener('click', () => {
+                        const wasCollapsed = collapsedFolders.has(folderName);
+                        if (wasCollapsed) {
+                            collapsedFolders.delete(folderName);
+                            folderContainer.classList.remove('hidden');
+                            arrow.style.transform = 'rotate(0deg)';
+                        } else {
+                            collapsedFolders.add(folderName);
+                            folderContainer.classList.add('hidden');
+                            arrow.style.transform = 'rotate(-90deg)';
+                        }
+                        saveSettingsToStorage(); // 상태 저장
+                    });
+                    
+                    // 해당 폴더의 채팅방 렌더링
+                    groupedRooms[folderName].forEach(room => {
+                        renderRoomItem(room, folderContainer); // 부모로 folderContainer 전달
+                    });
+                });
+            }
+        }
+        
+        // 개별 채팅방 항목 렌더링 함수
+        function renderRoomItem(room, parentElement) {
+            let roomName = getRoomName(room);
+            let lastMessage = room.last_message ? (room.last_message.substring(0, 30) + '...') : "대화 없음";
+            
+            const logs = chatLogs[room.id];
+            if ((!room.last_message || room.last_message === 'null') && logs && logs.length > 0) {
+                const lastLog = logs[logs.length - 1];
+                if (lastLog.message && lastLog.message !== 'null') {
+                    lastMessage = lastLog.message.substring(0, 30) + '...';
+                } else if (lastLog.attachment) {
+                    lastMessage = "[첨부파일]";
+                }
+            }
+            
+            // *** 신규: 오픈채팅 아이콘 ***
+            let openChatIcon = '';
+            const isOpentype = chatRoomTypes.get(room.id) === 4;
+            if (isOpentype) {
+                openChatIcon = ` <span class="text-xs font-normal text-blue-500 dark:text-blue-400">[오픈]</span>`;
+            }
+
+            const roomEl = document.createElement('div');
+            roomEl.className = 'chat-room-item p-4 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition-colors';
+            if (room.id === currentChatRoom.id) {
+                roomEl.classList.add('active'); // 현재 활성화된 방 표시
+            }
+            roomEl.innerHTML = `
+                <h3 class="font-semibold text-gray-800 dark:text-gray-100 truncate">${escapeHTML(roomName)}${openChatIcon}</h3>
+                <p class="text-sm text-gray-500 dark:text-gray-400 truncate">${escapeHTML(lastMessage)}</p>
+                <p class="text-xs text-gray-400 dark:text-gray-500 text-right">${formatTimestamp(room.last_timestamp, true)}</p>
+            `;
+            roomEl.addEventListener('click', () => {
+                loadChatMessages(room.id); // *** 수정: roomName 파라미터 제거 ***
+                // 모든 아이템에서 active 클래스 제거
+                document.querySelectorAll('.chat-room-item').forEach(el => el.classList.remove('active'));
+                // 현재 아이템에만 active 클래스 추가
+                roomEl.classList.add('active');
+            });
+            parentElement.appendChild(roomEl);
+        }
+
+        // 2. 특정 채팅방의 메시지 로드 및 렌더링
+        function loadChatMessages(chatId) { // *** 수정: roomName 파라미터 제거 ***
+            const room = chatRooms.find(r => r.id === chatId);
+            if (!room) return;
+            
+            const roomName = getRoomName(room); // *** 추가: roomName 여기서 계산 ***
+            const fullParticipantList = getFullParticipantList(room); // *** 신규: 툴팁용 이름 ***
+            
+            const isOpentype = chatRoomTypes.get(room.id) === 4; // *** 신규: 오픈채팅 확인 ***
+            currentChatRoom = { id: chatId, name: roomName, type: isOpentype ? 4 : null };
+        
+            // *** 신규: 오픈채팅 아이콘 헤더에 추가 ***
+            let openChatIcon = '';
+            if (isOpentype) {
+                 openChatIcon = ` <span class="text-base font-normal text-blue-500 dark:text-blue-400">[오픈]</span>`;
+            }
+            chatRoomNameEl.innerHTML = escapeHTML(roomName) + openChatIcon; // *** 수정: innerHTML 사용 ***
+            chatRoomNameEl.title = fullParticipantList; // *** 신규: 툴팁 설정 ***
+            
+            moveFolderBtn.classList.remove('hidden'); // 폴더 이동 버튼 표시
+            editRoomNameBtn.classList.remove('hidden'); // *** 신규: 이름 변경 버튼 표시 ***
+            messageSearchContainer.classList.remove('hidden'); // 대화 검색창 표시
+            messageSearchInput.value = ''; // 대화 검색창 초기화
+            
+            messagePlaceholder.classList.add('hidden');
+            
+            // 메시지 렌더링은 새 함수로 분리
+            filterAndRenderMessages();
+        }
+        
+        // 메시지 필터링 및 렌더링 함수
+        function filterAndRenderMessages() {
+            messageListEl.innerHTML = ''; // 목록 초기화
+            
+            // 검색 관련 변수 초기화
+            searchResults = [];
+            currentSearchIndex = -1;
+            
+            const messages = chatLogs[currentChatRoom.id] || [];
+            
+            if (messages.length === 0) {
+                messageListEl.innerHTML = '<div class="text-center text-gray-500 dark:text-gray-400 pt-10">대화 내용이 없습니다.</div>';
+                searchResultCountEl.textContent = '0/0';
+                searchPrevBtn.disabled = true;
+                searchNextBtn.disabled = true;
+                return;
+            }
+            
+            // 메시지를 시간순으로 정렬
+            messages.sort((a, b) => a.created_at - b.created_at);
+            
+            const searchTerm = messageSearchInput.value.toLowerCase();
+            let filteredMessages = messages;
+            
+            // *** 수정: 첨부파일 검색 로직 보강 ***
+            if (searchTerm) {
+                filteredMessages = messages.filter(msg => {
+                    const messageText = (msg.message && msg.message !== 'null') ? msg.message.toLowerCase() : "";
+                    const attachmentText = getAttachmentText(msg.attachment).toLowerCase(); // 첨부파일 텍스트 생성
+                    return messageText.includes(searchTerm) || attachmentText.includes(searchTerm);
+                });
+            }
+            
+            if (filteredMessages.length === 0) {
+                 messageListEl.innerHTML = `<div class="text-center text-gray-500 dark:text-gray-400 pt-10">'${escapeHTML(searchTerm)}'에 대한 검색 결과가 없습니다.</div>`;
+                searchResultCountEl.textContent = '0/0';
+                searchPrevBtn.disabled = true;
+                searchNextBtn.disabled = true;
+                return;
+            }
+
+            filteredMessages.forEach(msg => {
+                renderMessage(msg); // 메시지 렌더링
+            });
+            
+            // 렌더링 완료 후 하이라이트된 요소들 수집
+            if (searchTerm) {
+                // *** 수정: .search-highlight와 .search-highlight-me 모두 수집 ***
+                searchResults = messageListEl.querySelectorAll('.search-highlight, .search-highlight-me');
+                if (searchResults.length > 0) {
+                    currentSearchIndex = 0;
+                    // navigateSearchResults(0) -> navigateSearchResult(0, 0) // 첫번째 요소 활성화
+                    const activeResult = searchResults[0];
+                    activeResult.classList.add('search-highlight-active');
+                    activeResult.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }
+            
+            // 검색 결과 카운트 및 버튼 상태 업데이트
+            searchResultCountEl.textContent = `${searchResults.length > 0 ? currentSearchIndex + 1 : 0}/${searchResults.length}`;
+            searchPrevBtn.disabled = searchResults.length === 0;
+            searchNextBtn.disabled = searchResults.length === 0;
+            
+            // 검색 시에는 스크롤을 맨 위로, 아니면 맨 아래로
+            if (!searchTerm) {
+                messageListEl.scrollTop = messageListEl.scrollHeight;
+            }
+        }
+
+        // *** 신규: 첨부파일 텍스트 반환 (검색용) ***
+        function getAttachmentText(attachmentJson) {
+            if (!attachmentJson) return "";
+            try {
+                const att = JSON.parse(attachmentJson);
+                let fileName = "";
+                if (att.path) fileName = att.path.split('/').pop();
+                else if (att.name) fileName = att.name;
+                
+                if (att.type === 'image' || att.type === 'multi_photo' || (att.url && !att.type)) return `[이미지${fileName ? `: ${fileName}` : ''}]`;
+                if (att.type === 'video') return `[동영상${fileName ? `: ${fileName}` : ''}]`;
+                if (att.type === 'emoticon' || att.type === 'animated_emoticon') return `[이모티콘]`;
+                if (att.type === 'long_text') return `[장문 메시지]`;
+                if (att.type === 'file') return `[파일${fileName ? `: ${fileName}` : ''}]`;
+                if (att.type) return `[${att.type}]`;
+
+            } catch(e) {}
+            return "";
+        }
+
+
+        // 3. 개별 메시지 렌더링
+        function renderMessage(msg) {
+            const isMe = (String(msg.user_id) === myUserId);
+            
+            const senderName = friendsMap.get(msg.user_id) || `ID:${msg.user_id}`;
+            let senderNameDisplay = escapeHTML(senderName);
+            
+            // ID로 표시되는 경우, 클릭하여 이름 지정 기능 추가
+            if (senderName.startsWith('ID:')) {
+                senderNameDisplay = `<a href="#" class="text-blue-500 underline" onclick="event.preventDefault(); promptForFriendName(${msg.user_id})">${senderName}</a>`;
+            }
+            
+            const msgWrapper = document.createElement('div');
+            msgWrapper.className = `flex ${isMe ? 'justify-end' : 'justify-start'}`;
+            
+            const contentWrapper = document.createElement('p');
+            contentWrapper.className = "text-sm";
+            contentWrapper.style.whiteSpace = "pre-wrap";
+            contentWrapper.style.wordBreak = "break-word";
+            
+            // 1. 순수 텍스트 메시지(msg.message)는 이스케이프 처리
+            let safeContent = "";
+            const searchTerm = messageSearchInput.value; // 원본 검색어 (대소문자 구분 없음)
+            
+            if (msg.message && msg.message !== 'null') { // 'null' 텍스트 방지
+                safeContent = escapeHTML(msg.message).replace(/\n/g, '<br>');
+                
+                // *** 수정: '나'의 메시지 하이라이트 클래스 분기 ***
+                if (searchTerm && msg.message.toLowerCase().includes(searchTerm.toLowerCase())) {
+                    const regex = new RegExp(escapeRegExp(searchTerm), 'gi'); // 'gi' = global, case-insensitive
+                    const highlightClass = isMe ? 'search-highlight-me' : 'search-highlight';
+                    safeContent = safeContent.replace(regex, (match) => `<mark class="${highlightClass}">${match}</mark>`);
+                }
+            }
+
+            // 2. 첨부파일 정보 추가 (이 부분은 HTML 태그이므로 이스케이프 안함)
+            let attachmentContent = "";
+            if (msg.attachment) {
+                try {
+                    const att = JSON.parse(msg.attachment);
+                    const br = safeContent ? '<br>' : ''; // 텍스트가 있을 때만 줄바꿈
+                    
+                    let fileName = "";
+                    if (att.path) {
+                        fileName = escapeHTML(att.path.split('/').pop());
+                    } else if (att.name) {
+                        fileName = escapeHTML(att.name);
+                    }
+                    
+                    let attachmentType = ""; // 원본 텍스트 (하이라이트 전)
+                    let attachmentHTML = ""; // HTML 태그 포함
+                    
+                    if (att.type === 'image' || att.type === 'multi_photo' || (att.url && !att.type)) {
+                        fileName = fileName ? `: ${fileName}` : '';
+                        attachmentType = `[이미지${fileName}]`;
+                        attachmentHTML = `${br}<span class="text-xs text-blue-500 dark:text-blue-400">${attachmentType}</span>`;
+                    } else if (att.type === 'video') {
+                        fileName = fileName ? `: ${fileName}` : '';
+                        attachmentType = `[동영상${fileName}]`;
+                        attachmentHTML = `${br}<span class="text-xs text-purple-500 dark:text-purple-400">${attachmentType}</span>`;
+                    } else if (att.type === 'emoticon' || att.type === 'animated_emoticon') {
+                        attachmentType = `[이모티콘]`;
+                        attachmentHTML = `${br}<span class="text-xs text-green-500 dark:text-green-400">${attachmentType}</span>`;
+                    } else if (att.type === 'long_text') {
+                        attachmentType = `[장문 메시지]`;
+                        attachmentHTML = `${br}<span class="text-xs text-gray-500 dark:text-gray-400">${attachmentType}</span>`;
+                    } else if (att.type === 'file') {
+                        fileName = fileName ? `: ${fileName}` : '';
+                        attachmentType = `[파일${fileName}]`;
+                        attachmentHTML = `${br}<span class="text-xs text-indigo-500 dark:text-indigo-400">${attachmentType}</span>`;
+                    } else if (att.type) {
+                        attachmentType = `[${escapeHTML(att.type)}]`;
+                        attachmentHTML = `${br}<span class="text-xs text-gray-500 dark:text-gray-400">${attachmentType}</span>`;
+                    }
+                    
+                    // *** 수정: 첨부파일 텍스트도 하이라이트 (클래스 분기) ***
+                    if (searchTerm && attachmentType.toLowerCase().includes(searchTerm.toLowerCase())) {
+                         const regex = new RegExp(escapeRegExp(searchTerm), 'gi');
+                         const highlightClass = isMe ? 'search-highlight-me' : 'search-highlight';
+                         // attachmentHTML 자체를 하이라이트 처리
+                         attachmentHTML = attachmentHTML.replace(regex, (match) => `<mark class="${highlightClass}">${match}</mark>`);
+                    }
+                    attachmentContent = attachmentHTML;
+
+                } catch (e) {}
+            }
+            
+            // 3. 최종 컨텐츠 조합
+            contentWrapper.innerHTML = (safeContent + attachmentContent) || "<span class='text-gray-400'>(내용 없음)</span>";
+
+            // HTML 구조 재생성
+            msgWrapper.innerHTML = `
+                <div class="max-w-xs lg:max-w-md">
+                    ${!isMe ? `<div class="text-xs text-gray-600 dark:text-gray-400 mb-1 ml-2">${senderNameDisplay}</div>` : ''}
+                    <div class="px-4 py-2 rounded-lg ${isMe ? 'bg-yellow-300 text-gray-900' : 'bg-white dark:bg-gray-700 text-gray-800 dark:text-gray-100 shadow-sm'}">
+                        ${contentWrapper.outerHTML}
+                        <div class="text-xs text-gray-500 dark:text-gray-400 mt-1 text-right">${formatTimestamp(msg.created_at)}</div>
+                    </div>
+                </div>
+            `;
+            
+            messageListEl.appendChild(msgWrapper);
+        }
+
+
+        // 유틸리티 함수: 타임스탬프 변환
+        function formatTimestamp(unixTime, isShort = false) {
+            if (!unixTime || unixTime === 0) return '';
+            const date = new Date(unixTime * 1000);
+            
+            if (isShort) {
+                 // 오늘 날짜와 비교
+                const today = new Date();
+                if (date.toDateString() === today.toDateString()) {
+                    // 오늘이면 시간만
+                    return date.toLocaleString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: true });
+                } else {
+                    // 어제 이전이면 날짜만
+                    return date.toLocaleString('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' });
+                }
+            }
+            
+            return date.toLocaleString('ko-KR', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true
+            });
+        }
+        
+        // *** 신규: Regex 특수 문자 이스케이프 ***
+        function escapeRegExp(string) {
+            return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // $&는 일치하는 전체 문자열을 의미
+        }
+
+        // 유틸리티 함수: HTML 이스케이프 (XSS 방지)
+        function escapeHTML(str) {
+            if (typeof str !== 'string') return str;
+            return str.replace(/[&<>"']/g, function(m) {
+                return {
+                    '&': '&amp;',
+                    '<': '&lt;',
+                    '>': '&gt;',
+                    '"': '&quot;',
+                    "'": '&#39;'
+                }[m];
+            });
+        }
+
+    </script>
+</body>
+</html>
+
