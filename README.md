@@ -25,7 +25,7 @@
 
 1. GUI 복호화 도구 (`kakaodecrypt_gui.exe`)
 
-(여기에 GUI 실행 화면 스크린샷을 추가하세요)
+![GUI 스크린샷](GUI_Decrypter_main.png)
 
 2. HTML 웹 뷰어 (`kakaotalk_viewer.html`)
 
@@ -33,7 +33,7 @@
 - 다크 모드 스크린샷
 - 검색 / 폴더 / 이름 변경 등 주요 기능 스크린샷
 
-> 예: `![GUI 스크린샷](screens/gui.png)`
+![GUI 스크린샷](HTML_dialog.png)
 
 ---
 
@@ -122,34 +122,68 @@
 
 ## 📖 사용 방법 (간단 3단계)
 
-### 1단계: KakaoTalk DB 파일 준비
-- 루팅된 안드로이드 기기 또는 가상머신(녹스/LD플레이어 등)에서 파일 추출
-  - 대화: `data/data/com.kakao.talk/databases/KakaoTalk.db`
-  - 친구: `data/data/com.kakao.talk/databases/KakaoTalk2.db`
+### 1단계: (권장) MuMu 앱플레이어와 톡서랍으로 DB 파일 추출하기
 
-> **주의**: DB 추출 방법은 기기/환경마다 다르므로 별도 검색이 필요합니다.
+이 방법은 휴대폰 **루팅 없이** PC 앱플레이어와 **카카오톡 ‘톡서랍’ 기능**을 활용해 안전하게 DB를 추출하는 방법입니다.
+
+#### 준비물
+- Windows PC
+- **MuMu Player 12** (또는 루팅 가능한 다른 앱플레이어)
+- **카카오톡 톡서랍 플러스 구독** (필수: 모든 대화를 복원하기 위함)
+
+#### 추출 과정
+1. **MuMu Player 설정 (태블릿 모드 + ROOT)**
+   - MuMu Player 설치 및 실행
+   - 메뉴(≡) → `설정` → `디바이스 탭` → 모델: **Galaxy Tab S6 Lite** 선택 → 저장
+   - `기타 탭` → **ROOT 권한 활성화** → 재시작
+
+2. **카카오톡 설치 및 톡서랍 동기화**
+   - Play 스토어에서 카카오톡 설치 및 로그인 (태블릿 모드로 동시 로그인 가능)
+   - 카카오톡 → 설정 → 채팅 → **톡서랍** → `데이터 복원하기` 클릭 → 전체 대화 복원
+
+3. **DB 파일 추출 (Total Commander 사용)**
+   - Play 스토어에서 `Total Commander` 설치
+   - 실행 후 `/data/data/com.kakao.talk/databases/` 경로로 이동
+   - `KakaoTalk.db`, `KakaoTalk2.db` 선택 → 공유 폴더(`/storage/emulated/0/Download`)로 복사
+   - PC에서 복사된 DB 파일을 작업 폴더로 가져옴
 
 ### 2단계: DB 복호화 (옵션 A 또는 B)
+복호화를 통해 암호화된 DB를 `..._decrypted.db` 파일로 생성합니다.
 
-**옵션 A — 권장 (Windows, 쉬운 방법)**
-1. Releases 탭에서 `kakaodecrypt_gui.exe` 다운로드
-2. 추출한 `KakaoTalk.db`와 `KakaoTalk2.db`를 `.exe` 파일과 같은 폴더에 둠
-3. `kakaodecrypt_gui.exe` 실행 → 안내에 따라 파일 선택 및 User ID 추측 → 복호화 시작
-4. 완료 시 `KakaoTalk_decrypted.db`, `KakaoTalk2_decrypted.db` 생성
+#### 옵션 A (권장) — GUI 실행 파일 사용
+- Python 설치 불필요
+- GitHub의 **Releases 탭**에서 `kakaodecrypt_gui.exe` 다운로드
+- 1단계에서 추출한 `KakaoTalk.db`, `KakaoTalk2.db`를 `.exe`와 같은 폴더에 배치
+- `kakaodecrypt_gui.exe` 실행 후 안내에 따라 다음 순서로 클릭:
+  1. `[파일 선택]` → KakaoTalk.db 선택
+  2. `[User ID 추측하기]` → 자동으로 입력됨
+  3. `[파일 선택]` → KakaoTalk2.db 선택
+  4. `[DB 파일 복호화 실행]`
 
-**옵션 B — 개발자용 (소스 실행)**
+복호화 완료 후 폴더 내에 `KakaoTalk_decrypted.db`, `KakaoTalk2_decrypted.db` 생성.
+
+> ⚠️ **주의:** 이 파일은 PyInstaller로 빌드되어 일부 백신(V3, Windows Defender 등)에서 **False Positive(오탐)** 로 탐지될 수 있습니다. “추가 정보 → 실행”을 눌러 진행하세요.
+
+#### 옵션 B — 개발자용 (Python 스크립트 실행)
 1. Python 3 설치
-2. 암호화 라이브러리 설치: `pip install pycryptodome`
-3. `kakaodecrypt_gui.py` 실행: `python kakaodecrypt_gui.py`
-4. GUI에서 옵션 A와 동일한 절차로 복호화
+2. `pip install pycryptodome` 실행
+3. `kakaodecrypt_gui.py` 실행:
+   ```bash
+   python kakaodecrypt_gui.py
+   ```
+4. 이후 과정은 옵션 A의 5~6단계와 동일합니다.
 
-> **경고**: PyInstaller로 빌드된 `.exe`는 일부 백신에서 오탐(False Positive)이 발생할 수 있습니다. 신뢰할 수 있는 출처에서 받은 Releases 파일인지 확인 후 실행하세요.
+---
 
 ### 3단계: 뷰어에서 대화 확인
-1. `kakaotalk_viewer.html` 파일을 브라우저로 엽니다(Chrome/Edge 권장).
-2. User ID 입력(복호화 단계에서 사용한 user_id)
-3. `KakaoTalk_decrypted.db` 와 `KakaoTalk2_decrypted.db` 파일을 각각 선택
-4. `뷰어 시작하기` 버튼 클릭 → 대화 확인 및 관리
+1. `kakaotalk_viewer.html` 파일을 브라우저(Chrome 또는 Edge)로 엽니다.
+2. **User ID 입력**: 2단계에서 찾은 `user_id` (예: 1234567890)
+3. **DB 파일 선택**:
+   - KakaoTalk.db → `KakaoTalk_decrypted.db`
+   - KakaoTalk2.db → `KakaoTalk2_decrypted.db`
+4. `[뷰어 시작하기]` 버튼 클릭 → 브라우저에서 대화 확인 가능.
+
+   ![GUI 스크린샷](HTML_input.png)
 
 ---
 
@@ -203,9 +237,6 @@ pyinstaller --onefile --noconsole kakaodecrypt_gui.py
 - A: 백신의 오탐일 가능성이 높습니다. 신뢰할 수 있는 릴리즈인지 확인 후 예외 등록하거나, 소스에서 직접 빌드하여 사용하세요.
 
 **Q3: 뷰어에서 일부 메시지가 깨져 보입니다.**
-- A: 데이터베이스 추출 과정에서 문제가 발생했을 수 있습니다. 다른 추출 방법을 시도하거나 원본 DB를 다시 확보하세요.
+- A: 데이터베이스 추출 과정에서 문제가 발생했을 수 있습니다. 다른 추출 방법을 시도하거나 원본 DB를 다시 확보하세요. DB 내부를 확인하고 싶다면 DB Browser for SQLite 프로그램을 설치하여 dec 리스트를 확인하세요.
 
 ---
-
-원하시면 이 README를 `README.md` 형태로 저장해 드리거나, GitHub에 바로 올릴 수 있도록 `README.md` 파일을 생성해 드리겠습니다.
-
